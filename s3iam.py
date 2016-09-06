@@ -375,7 +375,7 @@ class S3Grabber(object):
 
         # Prepare autorization header params
         credential_authorization = ("Credential=%(access_key)s/%(scope)s" % ({'access_key': self.access_key, 'scope': scope}))
-        signed_headers_authorization = ("SignedHeaders=%(header_names)s" % ({'header_names': headers_names}))
+        signed_headers_authorization = ("SignedHeaders=%(header_names)s" % ({'header_names': header_names}))
         signature_headers_authorization = ("Signature=%(signature)s" % ({'signature': signature}))
 
         autorization_header = ("%(scheme)s-%(algorithm)s %(credential_authorization)s, %(signed_headers_authorization)s, %(signature_headers_authorization)s" % ({'scheme': scheme, 'algorithm': algorithm, 'credential_authorization': credential_authorization, 'signed_headers_authorization': signed_headers_authorization, 'signature_headers_authorization': signature_headers_authorization}))
