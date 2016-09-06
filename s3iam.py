@@ -358,7 +358,7 @@ class S3Grabber(object):
         # Headers & Header Names
 
         # Prepare canonical request
-        canon_req = self.get_canonical_request(request, ("%s\n" % headers), headers_names, empty_body_sha256)
+        canon_req = self.get_canonical_request(request, ("%s\n" % headers), header_names, empty_body_sha256)
 
         # Prepare scope & string to sign
         scope = ("%(date)s/%(region)s/%(service)s/%(terminator)s" % ({'date': date_stamp, 'region': region_name, 'service': service_name, 'terminator': terminator}))
@@ -375,7 +375,7 @@ class S3Grabber(object):
 
         # Prepare autorization header params
         credential_authorization = ("Credential=%(access_key)s/%(scope)s" % ({'access_key': self.access_key, 'scope': scope}))
-        signed_headers_authorization = ("SignedHeaders=%(headers_names)s" % ({'headers_names': headers_names}))
+        signed_headers_authorization = ("SignedHeaders=%(header_names)s" % ({'header_names': headers_names}))
         signature_headers_authorization = ("Signature=%(signature)s" % ({'signature': signature}))
 
         autorization_header = ("%(scheme)s-%(algorithm)s %(credential_authorization)s, %(signed_headers_authorization)s, %(signature_headers_authorization)s" % ({'scheme': scheme, 'algorithm': algorithm, 'credential_authorization': credential_authorization, 'signed_headers_authorization': signed_headers_authorization, 'signature_headers_authorization': signature_headers_authorization}))
