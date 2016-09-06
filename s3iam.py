@@ -209,12 +209,8 @@ class S3Grabber(object):
     def _request(self, path):
         url = urlparse.urljoin(self.baseurl, urllib2.quote(path))
         request = urllib2.Request(url)
-        if self.token:
-            request.add_header('x-amz-security-token', self.token)
-        signature = self.sign(request)
-        request.add_header('Authorization', "AWS {0}:{1}".format(
-            self.access_key,
-            signature))
+        autorization_header = self.signv4(request)
+        request.add_header('Authorization', autorization_header)
         return request
 
     def urlgrab(self, url, filename=None, **kwargs):
@@ -294,3 +290,113 @@ class S3Grabber(object):
             hashlib.sha1).digest()
         signature = digest.encode('base64')
         return signature.strip()
+
+    def signv4(self, request, timeval=None):
+        """Attach a valid S3 signature to request using AWS Signature 4.
+        request - instance of Request
+        """
+
+        host = request.get_host()
+
+        # TODO: bucket name finding is ugly, I should find a way to support
+        # both naming conventions: http://bucket.s3.amazonaws.com/ and
+        # http://s3.amazonaws.com/bucket/
+        try:
+            pos = host.find(".s3")
+            assert pos != -1
+            bucket = host[:pos]
+            pos_r = host.find(".amazonaws.com")
+            assert pos_r != -1
+            region_name = host[pos:pos_r].replace(".s3","").replace(".","",1).replace("-","",1)
+        except AssertionError:
+            raise yum.plugins.PluginYumExit(
+                "s3iam: baseurl hostname should be in format: "
+                "'<bucket>.s3.<aws-region>.amazonaws.com'; "
+                "found '%s'" % host)
+
+        # Variables
+        # Equal to h=hashlib.sha256() & h.update('') & h.hexdigest()
+        empty_body_sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
+        service_name = 's3'
+        scheme = 'AWS4'
+        algorithm = 'HMAC-SHA256'
+        terminator = 'aws4_request'
+
+        iso8601basicformat = "%Y%m%dT%H%M%SZ"
+        datestringformat = '%Y%m%d'
+        # Query string is empty
+        #qs = ''
+        # Variables
+
+        # Headers & Header Names
+        amz_headers = []
+        amz_header_names = []
+
+        request.add_header('host', host)
+        amz_headers.append('host:%s' % host)
+        amz_header_names.append('host')
+
+        request.add_header('x-amz-content-sha256', empty_body_sha256)
+        amz_headers.append('x-amz-content-sha256:%s' % empty_body_sha256)
+        amz_header_names.append('x-amz-content-sha256')
+
+        current = timeval or time.gmtime()
+        date_iso = time.strftime(iso8601basicformat, current)
+        date_stamp = time.strftime(datestringformat, current)
+        request.add_header('x-amz-date', date_iso)
+        amz_headers.append('x-amz-date:%s' % date_iso)
+        amz_header_names.append('x-amz-date')
+
+        if self.token:
+            request.add_header('x-amz-security-token', self.token)
+            amz_headers.append('x-amz-security-token:%s' % self.token)
+            amz_header_names.append('x-amz-security-token')
+
+        headers = '\n'.join(amz_headers)
+        header_names = ';'.join(amz_header_names)
+        # Headers & Header Names
+
+        # Prepare canonical request
+        canon_req = self.get_canonical_request(request, ("%s\n" % headers), headers_names, empty_body_sha256)
+
+        # Prepare scope & string to sign
+        scope = ("%(date)s/%(region)s/%(service)s/%(terminator)s" % ({'date': date_stamp, 'region': region_name, 'service': service_name, 'terminator': terminator}))
+        sigstring = self.get_string_to_sign(date_iso, scope, canon_req)
+
+        # Prepare keys
+        data_key = self.sign_msg(("%(scheme)s%(secret_key)s" % ({'scheme': scheme, 'secret_key': self.secret_key})).encode('utf-8'), date_stamp)
+        data_region_key = self.sign_msg(data_key, region_name)
+        data_region_service_key = self.sign_msg(data_region_key, service_name)
+        signing_key = self.sign_msg(data_region_service_key, terminator)
+
+        # Create signature
+        signature = self.sign_msg(signing_key, sigstring, hex=True)
+
+        # Prepare autorization header params
+        credential_authorization = ("Credential=%(access_key)s/%(scope)s" % ({'access_key': self.access_key, 'scope': scope}))
+        signed_headers_authorization = ("SignedHeaders=%(headers_names)s" % ({'headers_names': headers_names}))
+        signature_headers_authorization = ("Signature=%(signature)s" % ({'signature': signature}))
+
+        autorization_header = ("%(scheme)s-%(algorithm)s %(credential_authorization)s, %(signed_headers_authorization)s, %(signature_headers_authorization)s" % ({'scheme': scheme, 'algorithm': algorithm, 'credential_authorization': credential_authorization, 'signed_headers_authorization': signed_headers_authorization, 'signature_headers_authorization': signature_headers_authorization}))
+        return autorization_header;
+
+
+    def get_canonical_request(self, request, headers, header_names, body_hash):
+        canon_request = ("%(method)s\n%(path)s\n%(params)s\n%(headers)s\n%(header_names)s\n%(body_hash)s" % ({'method': request.get_method(), 'path': request.get_selector(), 'params': '', 'headers': headers, 'header_names': header_names, 'body_hash': body_hash}))
+        return canon_request
+
+
+    def get_string_to_sign(self, date_time, scope, canon_request, scheme='AWS4', algorithm='HMAC-SHA256'):
+        h = hashlib.sha256()
+        h.update(canon_request)
+        sigstring = ("%(scheme)s-%(algorithm)s\n%(datetime)s\n%(scope)s\n%(canonical_request)s" % ({'scheme': scheme, 'algorithm': algorithm, 'datetime': date_time, 'scope': scope, 'canonical_request': h.hexdigest()}))
+        return sigstring
+
+
+    def sign_msg(self, key, msg, hex=False):
+        if hex:
+          sig = hmac.new(key, msg.encode('utf-8'), hashlib.sha256).hexdigest()
+        else:
+          sig = hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+        return sig
